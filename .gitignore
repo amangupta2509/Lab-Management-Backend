@@ -64,3 +64,5 @@ script.py
 # Backup files
 *.bak
 *.backup
+
+lab-management-backend.pdf
