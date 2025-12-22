@@ -1,11 +1,11 @@
-const db = require('../config/database');
+const db = require("../config/database");
 
 // Get dashboard statistics
 exports.getDashboardStats = async (req, res) => {
   try {
     // Total users
     const [totalUsers] = await db.query(
-      'SELECT COUNT(*) as count FROM users WHERE is_active = true'
+      "SELECT COUNT(*) as count FROM users WHERE is_active = true"
     );
 
     // Total equipment
@@ -15,7 +15,7 @@ exports.getDashboardStats = async (req, res) => {
 
     // Total bookings
     const [totalBookings] = await db.query(
-      'SELECT COUNT(*) as count FROM bookings'
+      "SELECT COUNT(*) as count FROM bookings"
     );
 
     // Pending bookings
@@ -25,7 +25,7 @@ exports.getDashboardStats = async (req, res) => {
 
     // Today's active users
     const [activeToday] = await db.query(
-      'SELECT COUNT(DISTINCT user_id) as count FROM activity_logs WHERE activity_date = CURDATE()'
+      "SELECT COUNT(DISTINCT user_id) as count FROM activity_logs WHERE activity_date = CURDATE()"
     );
 
     // Most used equipment
@@ -46,15 +46,14 @@ exports.getDashboardStats = async (req, res) => {
         totalBookings: totalBookings[0].count,
         pendingBookings: pendingBookings[0].count,
         activeToday: activeToday[0].count,
-        mostUsedEquipment: mostUsed
-      }
+        mostUsedEquipment: mostUsed,
+      },
     });
-
   } catch (error) {
-    console.error('Get dashboard stats error:', error);
+    console.error("Get dashboard stats error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: "Server error",
     });
   }
 };
@@ -81,14 +80,13 @@ exports.getEquipmentUtilization = async (req, res) => {
     res.json({
       success: true,
       count: utilization.length,
-      utilization
+      utilization,
     });
-
   } catch (error) {
-    console.error('Get utilization error:', error);
+    console.error("Get utilization error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: "Server error",
     });
   }
 };
@@ -121,14 +119,13 @@ exports.getUserProductivity = async (req, res) => {
     res.json({
       success: true,
       count: productivity.length,
-      productivity
+      productivity,
     });
-
   } catch (error) {
-    console.error('Get productivity error:', error);
+    console.error("Get productivity error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: "Server error",
     });
   }
 };
@@ -169,15 +166,14 @@ exports.getBookingAnalytics = async (req, res) => {
       analytics: {
         byStatus,
         byEquipment,
-        trend
-      }
+        trend,
+      },
     });
-
   } catch (error) {
-    console.error('Get booking analytics error:', error);
+    console.error("Get booking analytics error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: "Server error",
     });
   }
 };
@@ -188,14 +184,13 @@ exports.getAllUsers = async (req, res) => {
     const { page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
 
+    // FIXED: Complete SQL query
     const [users] = await db.query(
-      'SELECT id, name, email, role, phone, department, created_at, is_active FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?',
+      "SELECT id, name, email, role, phone, department, created_at, is_active FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
       [parseInt(limit), offset]
     );
 
-    const [countResult] = await db.query(
-      'SELECT COUNT(*) as total FROM users'
-    );
+    const [countResult] = await db.query("SELECT COUNT(*) as total FROM users");
 
     res.json({
       success: true,
@@ -203,14 +198,13 @@ exports.getAllUsers = async (req, res) => {
       total: countResult[0].total,
       totalPages: Math.ceil(countResult[0].total / limit),
       currentPage: parseInt(page),
-      users
+      users,
     });
-
   } catch (error) {
-    console.error('Get users error:', error);
+    console.error("Get users error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: "Server error",
     });
   }
 };
@@ -220,29 +214,33 @@ exports.toggleUserStatus = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [user] = await db.query('SELECT is_active FROM users WHERE id = ?', [id]);
+    const [user] = await db.query("SELECT is_active FROM users WHERE id = ?", [
+      id,
+    ]);
 
     if (user.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: "User not found",
       });
     }
 
     const newStatus = !user[0].is_active;
 
-    await db.query('UPDATE users SET is_active = ? WHERE id = ?', [newStatus, id]);
+    await db.query("UPDATE users SET is_active = ? WHERE id = ?", [
+      newStatus,
+      id,
+    ]);
 
     res.json({
       success: true,
-      message: `User ${newStatus ? 'activated' : 'deactivated'} successfully`
+      message: `User ${newStatus ? "activated" : "deactivated"} successfully`,
     });
-
   } catch (error) {
-    console.error('Toggle user status error:', error);
+    console.error("Toggle user status error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: "Server error",
     });
   }
 };
