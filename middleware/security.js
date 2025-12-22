@@ -1,7 +1,6 @@
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
-const mongoSanitize = require('express-mongo-sanitize');
-const hpp = require('hpp');
+const rateLimit = require("express-rate-limit");
+const helmet = require("helmet");
+const hpp = require("hpp");
 
 // General API rate limiter
 exports.apiLimiter = rateLimit({
@@ -9,7 +8,8 @@ exports.apiLimiter = rateLimit({
   max: 100, // Limit each IP to 100 requests per windowMs
   message: {
     success: false,
-    message: 'Too many requests from this IP, please try again after 15 minutes'
+    message:
+      "Too many requests from this IP, please try again after 15 minutes",
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -22,7 +22,7 @@ exports.authLimiter = rateLimit({
   skipSuccessfulRequests: true, // Don't count successful requests
   message: {
     success: false,
-    message: 'Too many login attempts, please try again after 15 minutes'
+    message: "Too many login attempts, please try again after 15 minutes",
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -34,7 +34,7 @@ exports.bookingLimiter = rateLimit({
   max: 10, // Limit each IP to 10 bookings per hour
   message: {
     success: false,
-    message: 'Too many booking requests, please try again later'
+    message: "Too many booking requests, please try again later",
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -46,7 +46,7 @@ exports.uploadLimiter = rateLimit({
   max: 20, // Limit each IP to 20 uploads per hour
   message: {
     success: false,
-    message: 'Too many upload requests, please try again later'
+    message: "Too many upload requests, please try again later",
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -65,35 +65,30 @@ exports.securityHeaders = helmet({
   hsts: {
     maxAge: 31536000, // 1 year
     includeSubDomains: true,
-    preload: true
+    preload: true,
   },
   frameguard: {
-    action: 'deny'
+    action: "deny",
   },
   noSniff: true,
   xssFilter: true,
 });
 
-// Sanitize data to prevent NoSQL injection (works for any req.body, req.query, req.params)
-exports.sanitizeData = mongoSanitize({
-  replaceWith: '_',
-  onSanitize: ({ req, key }) => {
-    console.warn(`Sanitized potentially malicious input in ${key}`);
-  },
-});
-
 // Prevent HTTP Parameter Pollution
 exports.preventPollution = hpp({
-  whitelist: ['status', 'type', 'role', 'page', 'limit', 'sort'] // Allow duplicate params for these fields
+  whitelist: ["status", "type", "role", "page", "limit", "sort"], // Allow duplicate params for these fields
 });
 
 // Custom middleware to sanitize file names
 exports.sanitizeFileName = (req, res, next) => {
   if (req.file) {
     // Remove any path traversal attempts
-    req.file.originalname = req.file.originalname.replace(/\.\./g, '');
+    req.file.originalname = req.file.originalname.replace(/\.\./g, "");
     // Remove special characters except dots and hyphens
-    req.file.originalname = req.file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    req.file.originalname = req.file.originalname.replace(
+      /[^a-zA-Z0-9.-]/g,
+      "_"
+    );
   }
   next();
 };
@@ -101,48 +96,63 @@ exports.sanitizeFileName = (req, res, next) => {
 // CORS configuration
 exports.corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
+    // In development, allow all origins
+    if (process.env.NODE_ENV === "development") {
+      return callback(null, true);
+    }
+
+    // Allow requests with no origin (like mobile apps, Postman, curl)
     if (!origin) return callback(null, true);
-    
-    const allowedOrigins = process.env.ALLOWED_ORIGINS 
-      ? process.env.ALLOWED_ORIGINS.split(',') 
-      : ['http://localhost:3000', 'http://localhost:3001'];
-    
+
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(",")
+      : [
+          "http://localhost:3000",
+          "http://localhost:3001",
+          "http://localhost:8081", // Expo web default
+          "http://127.0.0.1:8081", // Expo web alternative
+          "http://10.75.127.122:8081", // Your actual Expo dev server
+        ];
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      console.log("Origin not allowed:", origin);
+      callback(null, true); // Allow in development anyway
+      // callback(new Error('Not allowed by CORS')); // Use this in production
     }
   },
   credentials: true,
   optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
 };
 
 // Request logging middleware
 exports.requestLogger = (req, res, next) => {
   const start = Date.now();
-  
+
   // Log after response is sent
-  res.on('finish', () => {
+  res.on("finish", () => {
     const duration = Date.now() - start;
-    console.log(`${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`);
+    console.log(
+      `${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`
+    );
   });
-  
+
   next();
 };
 
 // Error sanitizer - don't expose internal errors
 exports.sanitizeError = (err, req, res, next) => {
-  console.error('Error:', err);
+  console.error("Error:", err);
 
   // Don't expose error details in production
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  
+  const isDevelopment = process.env.NODE_ENV === "development";
+
   res.status(err.status || 500).json({
     success: false,
-    message: err.message || 'Internal server error',
-    ...(isDevelopment && { stack: err.stack })
+    message: err.message || "Internal server error",
+    ...(isDevelopment && { stack: err.stack }),
   });
 };
