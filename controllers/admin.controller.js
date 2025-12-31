@@ -3,58 +3,296 @@ const db = require("../config/database");
 // Get dashboard statistics
 exports.getDashboardStats = async (req, res) => {
   try {
-    // Total users
-    const [totalUsers] = await db.query(
+    const [[totalUsers]] = await db.query(
       "SELECT COUNT(*) as count FROM users WHERE is_active = true"
     );
 
-    // Total equipment
-    const [totalEquipment] = await db.query(
+    const [[totalEquipment]] = await db.query(
       'SELECT COUNT(*) as count FROM equipment WHERE status != "deleted"'
     );
 
-    // Total bookings
-    const [totalBookings] = await db.query(
-      "SELECT COUNT(*) as count FROM bookings"
+    const [[availableEquipment]] = await db.query(
+      'SELECT COUNT(*) as count FROM equipment WHERE status = "available"'
     );
 
-    // Pending bookings
-    const [pendingBookings] = await db.query(
+    const [[pendingBookings]] = await db.query(
       'SELECT COUNT(*) as count FROM bookings WHERE status = "pending"'
     );
 
-    // Today's active users
-    const [activeToday] = await db.query(
-      "SELECT COUNT(DISTINCT user_id) as count FROM activity_logs WHERE activity_date = CURDATE()"
+    const [[todayBookings]] = await db.query(
+      "SELECT COUNT(*) as count FROM bookings WHERE booking_date = CURDATE()"
     );
 
-    // Most used equipment
-    const [mostUsed] = await db.query(
-      `SELECT e.name, COUNT(*) as usage_count
-       FROM equipment_usage_sessions eus
-       JOIN equipment e ON eus.equipment_id = e.id
-       GROUP BY eus.equipment_id
-       ORDER BY usage_count DESC
-       LIMIT 5`
+    const [[activeToday]] = await db.query(
+      "SELECT COUNT(DISTINCT user_id) as count FROM activity_logs WHERE activity_date = CURDATE()"
     );
 
     res.json({
       success: true,
       stats: {
-        totalUsers: totalUsers[0].count,
-        totalEquipment: totalEquipment[0].count,
-        totalBookings: totalBookings[0].count,
-        pendingBookings: pendingBookings[0].count,
-        activeToday: activeToday[0].count,
-        mostUsedEquipment: mostUsed,
+        totalUsers: totalUsers.count,
+        activeUsers: activeToday.count,
+        totalEquipment: totalEquipment.count,
+        availableEquipment: availableEquipment.count,
+        pendingBookings: pendingBookings.count,
+        todayBookings: todayBookings.count,
       },
     });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// NEW: Peak hours analysis
+exports.getPeakHoursAnalysis = async (req, res) => {
+  try {
+    const [peakHours] = await db.query(`
+      SELECT 
+        HOUR(start_time) as hour_of_day,
+        COUNT(*) as session_count
+      FROM equipment_usage_sessions
+      WHERE start_time >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+      GROUP BY HOUR(start_time)
+      ORDER BY hour_of_day
+    `);
+
+    res.json({ success: true, peak_hours: peakHours });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+// NEW: Daily usage patterns
+exports.getDailyUsagePatterns = async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+
+    const [patterns] = await db.query(
+      `
+      SELECT 
+        DATE(start_time) as usage_date,
+        COUNT(*) as session_count,
+        SUM(duration_minutes) as total_minutes
+      FROM equipment_usage_sessions
+      WHERE start_time >= DATE_SUB(NOW(), INTERVAL ? DAY)
+      GROUP BY DATE(start_time)
+      ORDER BY usage_date DESC
+    `,
+      [days]
+    );
+
+    res.json({ success: true, patterns });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+exports.getUserDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get user basic info
+    const [[user]] = await db.query(
+      `SELECT id, name, email, role, department, phone, created_at, is_active
+       FROM users 
+       WHERE id = ?`,
+      [id]
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Get work hours from activity logs
+    const [activityStats] = await db.query(
+      `SELECT 
+        COUNT(*) as total_sessions,
+        COALESCE(SUM(duration_minutes), 0) as total_minutes,
+        COALESCE(ROUND(SUM(duration_minutes) / 60, 2), 0) as total_hours,
+        MIN(sign_in_time) as first_activity,
+        MAX(sign_out_time) as last_activity
+       FROM activity_logs
+       WHERE user_id = ?`,
+      [id]
+    );
+
+    // Get equipment usage statistics
+    const [equipmentUsage] = await db.query(
+      `SELECT 
+        e.id,
+        e.name as equipment_name,
+        e.type as equipment_type,
+        COUNT(eus.id) as usage_count,
+        COALESCE(SUM(eus.duration_minutes), 0) as total_minutes,
+        COALESCE(ROUND(SUM(eus.duration_minutes) / 60, 2), 0) as total_hours,
+        MAX(eus.start_time) as last_used
+       FROM equipment_usage_sessions eus
+       JOIN equipment e ON eus.equipment_id = e.id
+       WHERE eus.user_id = ?
+       GROUP BY e.id, e.name, e.type
+       ORDER BY total_hours DESC`,
+      [id]
+    );
+
+    // Get booking statistics
+    const [bookingStats] = await db.query(
+      `SELECT 
+        COUNT(*) as total_bookings,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_bookings,
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_bookings,
+        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected_bookings,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_bookings,
+        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_bookings
+       FROM bookings
+       WHERE user_id = ?`,
+      [id]
+    );
+
+    // Get recent activity
+    const [recentActivity] = await db.query(
+      `SELECT 
+        activity_date,
+        sign_in_time,
+        sign_out_time,
+        duration_minutes
+       FROM activity_logs
+       WHERE user_id = ?
+       ORDER BY activity_date DESC, sign_in_time DESC
+       LIMIT 10`,
+      [id]
+    );
+
+    // Get print logs
+    const [printStats] = await db.query(
+      `SELECT 
+        COALESCE(SUM(print_count), 0) as total_prints,
+        COUNT(*) as print_sessions
+       FROM print_logs
+       WHERE user_id = ?`,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      user,
+      statistics: {
+        activity: activityStats[0],
+        bookings: bookingStats[0],
+        prints: printStats[0],
+      },
+      equipmentUsage,
+      recentActivity,
+    });
   } catch (error) {
-    console.error("Get dashboard stats error:", error);
+    console.error("Get user details error:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
     });
+  }
+};
+
+exports.getMachineUtilizationAnalytics = async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+
+    const WORK_HOURS_PER_DAY = 8;
+    const TOTAL_AVAILABLE_HOURS = WORK_HOURS_PER_DAY * days;
+
+    const [rows] = await db.query(
+      `
+      SELECT
+        e.id,
+        e.name,
+        e.type,
+        COUNT(eus.id) as total_sessions,
+
+        COALESCE(
+          ROUND(
+            SUM(TIMESTAMPDIFF(
+              MINUTE,
+              eus.start_time,
+              COALESCE(eus.end_time, NOW())
+            )
+          ) / 60,
+          2
+        ),
+        0
+      ) AS total_hours,
+
+      MAX(eus.start_time) as last_used
+    FROM equipment e
+    LEFT JOIN equipment_usage_sessions eus
+      ON e.id = eus.equipment_id
+      AND eus.start_time >= DATE_SUB(NOW(), INTERVAL ? DAY)
+    WHERE e.status != "deleted"
+    GROUP BY e.id
+    ORDER BY total_hours DESC
+    `,
+      [days]
+    );
+
+    let underusedCount = 0;
+    let overloadedCount = 0;
+
+    const machines = rows.map((m) => {
+      const utilizationPercent =
+        TOTAL_AVAILABLE_HOURS > 0
+          ? Math.min(
+              Math.round(
+                (parseFloat(m.total_hours) / TOTAL_AVAILABLE_HOURS) * 100
+              ),
+              100
+            )
+          : 0;
+
+      // Count underused (<20%) and overloaded (>80%)
+      if (utilizationPercent < 20 && parseFloat(m.total_hours) > 0) {
+        underusedCount++;
+      }
+      if (utilizationPercent > 80) {
+        overloadedCount++;
+      }
+
+      return {
+        id: m.id,
+        name: m.name,
+        type: m.type,
+        total_sessions: m.total_sessions,
+        total_hours: m.total_hours,
+        utilization_percent: utilizationPercent,
+        last_used: m.last_used,
+      };
+    });
+
+    // Calculate summary statistics
+    const totalMachines = machines.length;
+    const totalHours = machines.reduce(
+      (sum, m) => sum + parseFloat(m.total_hours),
+      0
+    );
+    const averageUtilizationHours =
+      totalMachines > 0 ? (totalHours / totalMachines).toFixed(2) : 0;
+
+    res.json({
+      success: true,
+      period_days: days,
+      summary: {
+        total_machines: totalMachines,
+        average_utilization_hours: parseFloat(averageUtilizationHours),
+        underused_count: underusedCount,
+        overloaded_count: overloadedCount,
+      },
+      machines,
+    });
+  } catch (err) {
+    console.error("Utilization analytics error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -184,28 +422,32 @@ exports.getAllUsers = async (req, res) => {
     const { page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
 
-    // FIXED: Complete SQL query
     const [users] = await db.query(
-      "SELECT id, name, email, role, phone, department, created_at, is_active FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+      `SELECT 
+         id,
+         name,
+         email,
+         role,
+         department,
+         phone,          
+         is_active,
+         created_at      
+       FROM users
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
       [parseInt(limit), offset]
     );
 
-    const [countResult] = await db.query("SELECT COUNT(*) as total FROM users");
+    const [[count]] = await db.query("SELECT COUNT(*) as total FROM users");
 
     res.json({
       success: true,
-      count: users.length,
-      total: countResult[0].total,
-      totalPages: Math.ceil(countResult[0].total / limit),
-      currentPage: parseInt(page),
       users,
+      total: count.total,
     });
-  } catch (error) {
-    console.error("Get users error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -214,33 +456,23 @@ exports.toggleUserStatus = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [user] = await db.query("SELECT is_active FROM users WHERE id = ?", [
-      id,
-    ]);
+    const [[user]] = await db.query(
+      "SELECT is_active FROM users WHERE id = ?",
+      [id]
+    );
 
-    if (user.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
     }
 
-    const newStatus = !user[0].is_active;
-
     await db.query("UPDATE users SET is_active = ? WHERE id = ?", [
-      newStatus,
+      !user.is_active,
       id,
     ]);
 
-    res.json({
-      success: true,
-      message: `User ${newStatus ? "activated" : "deactivated"} successfully`,
-    });
-  } catch (error) {
-    console.error("Toggle user status error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 };
