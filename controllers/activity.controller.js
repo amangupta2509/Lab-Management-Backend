@@ -39,7 +39,115 @@ exports.getMyActivity = async (req, res) => {
     });
   }
 };
+exports.autoSignIn = async (userId) => {
+  try {
+    // Check if already signed in today
+    const [existing] = await db.query(
+      "SELECT * FROM activity_logs WHERE user_id = ? AND activity_date = CURDATE() AND sign_out_time IS NULL",
+      [userId]
+    );
 
+    if (existing.length === 0) {
+      // Create new activity log
+      await db.query(
+        "INSERT INTO activity_logs (user_id, activity_date, sign_in_time) VALUES (?, CURDATE(), NOW())",
+        [userId]
+      );
+    }
+  } catch (error) {
+    console.error("Auto sign-in error:", error);
+  }
+};
+
+// NEW: Manual sign-in endpoint
+exports.signIn = async (req, res) => {
+  try {
+    const userId = req.userId;
+
+    // Check if already signed in today
+    const [existing] = await db.query(
+      `SELECT * FROM activity_logs 
+       WHERE user_id = ? 
+       AND activity_date = CURDATE() 
+       AND sign_out_time IS NULL`,
+      [userId]
+    );
+
+    if (existing.length > 0) {
+      return res.json({
+        success: true,
+        message: "Already signed in today",
+        activity: existing[0],
+      });
+    }
+
+    // Create new activity log
+    const [result] = await db.query(
+      `INSERT INTO activity_logs (user_id, activity_date, sign_in_time) 
+       VALUES (?, CURDATE(), NOW())`,
+      [userId]
+    );
+
+    // Get the created activity
+    const [newActivity] = await db.query(
+      `SELECT * FROM activity_logs WHERE id = ?`,
+      [result.insertId]
+    );
+
+    // Create lab logbook entry
+    const [user] = await db.query("SELECT name FROM users WHERE id = ?", [
+      userId,
+    ]);
+    await db.query(
+      `INSERT INTO lab_logbook (user_id, activity_type, description) 
+       VALUES (?, ?, ?)`,
+      [userId, "sign_in", `${user[0].name} signed in to lab`]
+    );
+
+    res.json({
+      success: true,
+      message: "Signed in successfully",
+      activity: newActivity[0],
+    });
+  } catch (error) {
+    console.error("Sign-in error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+// NEW: Auto sign-out
+exports.autoSignOut = async (req, res) => {
+  try {
+    const userId = req.userId;
+
+    // Find today's open session
+    const [session] = await db.query(
+      "SELECT * FROM activity_logs WHERE user_id = ? AND activity_date = CURDATE() AND sign_out_time IS NULL",
+      [userId]
+    );
+
+    if (session.length > 0) {
+      await db.query(
+        "UPDATE activity_logs SET sign_out_time = NOW() WHERE id = ?",
+        [session[0].id]
+      );
+    }
+
+    res.json({
+      success: true,
+      message: "Signed out successfully",
+    });
+  } catch (error) {
+    console.error("Auto sign-out error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
 // Get all users' activity logs (Admin)
 exports.getAllActivity = async (req, res) => {
   try {
@@ -247,7 +355,6 @@ exports.addPrintLog = async (req, res) => {
       });
     }
 
-    // FIXED: Complete SQL query with CURDATE()
     const [result] = await db.query(
       "INSERT INTO print_logs (user_id, print_count, document_name, print_date, notes) VALUES (?, ?, ?, CURDATE(), ?)",
       [userId, print_count, document_name, notes]
