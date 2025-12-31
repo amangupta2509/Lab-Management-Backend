@@ -1,47 +1,37 @@
 const db = require("../config/database");
 
 // Create new booking
+
 exports.createBooking = async (req, res) => {
   try {
     const userId = req.userId;
     const { equipment_id, booking_date, start_time, end_time, purpose } =
       req.body;
 
-    // ADD THIS DEBUG LOG
-    console.log("Booking Request Body:", {
-      equipment_id,
-      booking_date,
-      start_time,
-      end_time,
-      purpose,
-      userId,
-    });
-
-    // Validation
     if (!equipment_id || !booking_date || !start_time || !end_time) {
-      console.log("Validation failed: Missing required fields");
       return res.status(400).json({
         success: false,
         message: "Please provide all required fields",
-        received: { equipment_id, booking_date, start_time, end_time },
       });
     }
 
-    // Check if equipment exists and is available
+    const cleanDate = booking_date.split("T")[0];
+
+    console.log("Original booking_date:", booking_date);
+    console.log("Clean booking_date:", cleanDate);
+
     const [equipment] = await db.query(
       'SELECT * FROM equipment WHERE id = ? AND status = "available"',
       [equipment_id]
     );
 
     if (equipment.length === 0) {
-      console.log("Equipment not found or not available:", equipment_id);
       return res.status(404).json({
         success: false,
         message: "Equipment not found or not available",
       });
     }
 
-    // Check for overlapping bookings
     const [overlapping] = await db.query(
       `SELECT * FROM bookings
       WHERE equipment_id = ?
@@ -54,7 +44,7 @@ exports.createBooking = async (req, res) => {
       )`,
       [
         equipment_id,
-        booking_date,
+        cleanDate,
         end_time,
         start_time,
         end_time,
@@ -65,28 +55,25 @@ exports.createBooking = async (req, res) => {
     );
 
     if (overlapping.length > 0) {
-      console.log("Time slot already booked:", overlapping);
       return res.status(400).json({
         success: false,
         message: "This time slot is already booked",
       });
     }
 
-    // Create booking
+    // Create booking with clean date
     const [result] = await db.query(
       "INSERT INTO bookings (user_id, equipment_id, booking_date, start_time, end_time, purpose, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [
         userId,
         equipment_id,
-        booking_date,
+        cleanDate,
         start_time,
         end_time,
         purpose,
         "pending",
       ]
     );
-
-    console.log("Booking created successfully:", result.insertId);
 
     // Create lab logbook entry
     const [user] = await db.query("SELECT name FROM users WHERE id = ?", [
@@ -113,7 +100,6 @@ exports.createBooking = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -221,7 +207,6 @@ exports.approveBooking = async (req, res) => {
     const adminId = req.userId;
     const { remarks } = req.body;
 
-    // Check if booking exists
     const [booking] = await db.query(
       'SELECT * FROM bookings WHERE id = ? AND status = "pending"',
       [id]
@@ -240,7 +225,7 @@ exports.approveBooking = async (req, res) => {
       ["approved", adminId, remarks, id]
     );
 
-    // Create notification for user
+    // ✅ FIXED: Added comma after query
     await db.query(
       "INSERT INTO notifications (user_id, title, message, type, related_booking_id) VALUES (?, ?, ?, ?, ?)",
       [
@@ -284,6 +269,43 @@ exports.approveBooking = async (req, res) => {
   }
 };
 
+// NEW: Get available time slots for equipment
+exports.getAvailableSlots = async (req, res) => {
+  try {
+    const { equipment_id, date } = req.query;
+
+    if (!equipment_id || !date) {
+      return res.status(400).json({
+        success: false,
+        message: "Equipment ID and date are required",
+      });
+    }
+
+    // Get all booked slots for this equipment on this date
+    const [bookedSlots] = await db.query(
+      `SELECT start_time, end_time 
+       FROM bookings 
+       WHERE equipment_id = ? 
+       AND booking_date = ? 
+       AND status IN ('pending', 'approved')
+       ORDER BY start_time`,
+      [equipment_id, date]
+    );
+
+    res.json({
+      success: true,
+      date,
+      equipment_id,
+      bookedSlots,
+    });
+  } catch (error) {
+    console.error("Get available slots error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
 // Reject booking (Admin)
 exports.rejectBooking = async (req, res) => {
   try {
@@ -291,7 +313,6 @@ exports.rejectBooking = async (req, res) => {
     const adminId = req.userId;
     const { remarks } = req.body;
 
-    // Check if booking exists
     const [booking] = await db.query(
       'SELECT * FROM bookings WHERE id = ? AND status = "pending"',
       [id]
@@ -310,7 +331,7 @@ exports.rejectBooking = async (req, res) => {
       ["rejected", adminId, remarks, id]
     );
 
-    // Create notification for user
+    // ✅ FIXED: Added comma after query
     await db.query(
       "INSERT INTO notifications (user_id, title, message, type, related_booking_id) VALUES (?, ?, ?, ?, ?)",
       [
