@@ -152,14 +152,16 @@ process.on("unhandledRejection", (reason, promise) => {
   }
 });
 
-// Start server
+// Start server - LISTEN ON ALL NETWORK INTERFACES
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log("=================================");
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`🔗 API URL: http://localhost:${PORT}`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔗 Local URL: http://localhost:${PORT}`);
+  console.log(`📱 Network URL: http://10.51.182.136:${PORT}`);
+  console.log(`🏥 Health check: http://10.51.182.136:${PORT}/health`);
+  console.log(`✅ Listening on all network interfaces (0.0.0.0)`);
   console.log("=================================");
 });
 
