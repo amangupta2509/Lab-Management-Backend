@@ -1,3 +1,4 @@
+// controllers/auth.controller.js
 const db = require("../config/database");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -7,8 +8,8 @@ const nodemailer = require("nodemailer");
 // Configure email transporter
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: true,
+  port: Number(process.env.SMTP_PORT),
+  secure: Number(process.env.SMTP_PORT) === 465,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
@@ -100,8 +101,8 @@ exports.register = async (req, res) => {
 
     // Create user (default role is 'user')
     const [result] = await db.query(
-      "INSERT INTO users (name, email, password, phone, department, role, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [name, email, hashedPassword, phone, department, "user", true]
+      "INSERT INTO users (name, email, password, phone, department, role, is_active) VALUES (?, ?, ?, ?, ?, 'user', true)",
+      [name, email, hashedPassword, phone, department]
     );
 
     // Generate token
@@ -205,87 +206,9 @@ exports.login = async (req, res) => {
   }
 };
 
-// Logout user
-exports.logout = async (req, res) => {
-  try {
-    res.json({
-      success: true,
-      message: "Logout successful",
-    });
-  } catch (error) {
-    console.error("Logout error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Logout failed",
-    });
-  }
-};
-
-// Verify token
-exports.verifyToken = async (req, res) => {
-  try {
-    const [users] = await db.query(
-      "SELECT id, name, email, role, is_active FROM users WHERE id = ?",
-      [req.userId]
-    );
-
-    if (users.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    res.json({
-      success: true,
-      user: users[0],
-    });
-  } catch (error) {
-    console.error("Verify token error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Verification failed",
-    });
-  }
-};
-
-// Refresh token
-exports.refreshToken = async (req, res) => {
-  try {
-    const [users] = await db.query(
-      "SELECT id, name, email, role, is_active FROM users WHERE id = ?",
-      [req.userId]
-    );
-
-    if (users.length === 0 || !users[0].is_active) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found or inactive",
-      });
-    }
-
-    const token = generateToken(users[0]);
-
-    res.json({
-      success: true,
-      token,
-      user: {
-        id: users[0].id,
-        name: users[0].name,
-        email: users[0].email,
-        role: users[0].role,
-      },
-    });
-  } catch (error) {
-    console.error("Refresh token error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Token refresh failed",
-    });
-  }
-};
-
 // Forgot password
+// In controllers/auth.controller.js - Update the forgotPassword function
+
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -297,13 +220,11 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    // Find user
     const [users] = await db.query(
       "SELECT id, email, name FROM users WHERE email = ?",
       [email]
     );
 
-    // Don't reveal if email exists or not (security)
     if (users.length === 0) {
       return res.json({
         success: true,
@@ -319,14 +240,24 @@ exports.forgotPassword = async (req, res) => {
       .digest("hex");
     const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour
 
-    // Save reset token to database
     await db.query(
       "UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?",
       [resetTokenHash, resetTokenExpiry, users[0].id]
     );
 
-    // Send email with reset token
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    const clientType = req.headers["x-client-type"] || "mobile"; // Can be set by frontend
+
+    let resetUrl;
+    if (clientType === "web") {
+      // For web version
+      resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    } else {
+      // For mobile app - use deep link
+      resetUrl = `labmanagementfrontend://reset-password?token=${resetToken}`;
+
+      // Alternative: Universal link (if you have a domain)
+      // resetUrl = `https://labmanagement.app/reset-password?token=${resetToken}`;
+    }
 
     try {
       await transporter.sendMail({
@@ -340,35 +271,72 @@ exports.forgotPassword = async (req, res) => {
             <style>
               body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
               .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-              .header { background: #2196F3; color: white; padding: 20px; text-align: center; }
-              .content { background: #f5f5f5; padding: 30px; }
-              .button { 
-                display: inline-block; 
-                background: #2196F3; 
-                color: white; 
-                padding: 12px 30px; 
-                text-decoration: none; 
-                border-radius: 5px; 
+              .header { background: #2196F3; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+              .content { background: #f5f5f5; padding: 30px; border-radius: 0 0 8px 8px; }
+              .button {
+                display: inline-block;
+                background: #2196F3;
+                color: white;
+                padding: 12px 30px;
+                text-decoration: none;
+                border-radius: 5px;
                 margin: 20px 0;
+                font-weight: bold;
+              }
+              .token-box {
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                margin: 20px 0;
+                border: 2px dashed #2196F3;
+                word-break: break-all;
+                font-family: monospace;
+                font-size: 14px;
               }
               .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+              .warning { background: #fff3cd; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #ffc107; }
             </style>
           </head>
           <body>
             <div class="container">
               <div class="header">
-                <h1>Password Reset Request</h1>
+                <h1> Password Reset Request</h1>
               </div>
               <div class="content">
-                <p>Hello ${users[0].name},</p>
+                <p>Hello <strong>${users[0].name}</strong>,</p>
                 <p>You requested to reset your password for your Lab Management System account.</p>
-                <p>Click the button below to reset your password:</p>
-                <p style="text-align: center;">
-                  <a href="${resetUrl}" class="button">Reset Password</a>
-                </p>
-                <p>Or copy and paste this link in your browser:</p>
-                <p style="word-break: break-all; color: #2196F3;">${resetUrl}</p>
-                <p><strong>This link will expire in 1 hour.</strong></p>
+                
+                ${
+                  clientType === "mobile"
+                    ? `
+                  <p><strong>For Mobile App:</strong></p>
+                  <p>Tap the button below to open the app and reset your password:</p>
+                  <p style="text-align: center;">
+                    <a href="${resetUrl}" class="button">Reset Password in App</a>
+                  </p>
+                  
+                  <div class="warning">
+                    <strong>📱 Mobile App Instructions:</strong>
+                    <ol>
+                      <li>Tap the button above to open the Lab Management app</li>
+                      <li>If the app doesn't open automatically, copy the token below</li>
+                      <li>Open the app manually and paste the token</li>
+                    </ol>
+                  </div>
+                  
+                  <p><strong>Your Reset Token:</strong></p>
+                  <div class="token-box">${resetToken}</div>
+                `
+                    : `
+                  <p style="text-align: center;">
+                    <a href="${resetUrl}" class="button">Reset Password</a>
+                  </p>
+                  <p>Or copy and paste this link in your browser:</p>
+                  <p style="word-break: break-all; color: #2196F3;">${resetUrl}</p>
+                `
+                }
+                
+                <p><strong>⏰ This link will expire in 1 hour.</strong></p>
                 <p>If you didn't request this password reset, please ignore this email and your password will remain unchanged.</p>
               </div>
               <div class="footer">
@@ -380,11 +348,11 @@ exports.forgotPassword = async (req, res) => {
         `,
       });
 
-      console.log("Password reset email sent to:", email);
+      console.log("✅ Password reset email sent to:", email);
+      console.log("🔗 Reset URL type:", clientType);
     } catch (emailError) {
-      console.error("Email sending failed:", emailError);
+      console.error("❌ Email sending failed:", emailError);
 
-      // Clean up the reset token if email fails
       await db.query(
         "UPDATE users SET reset_token = NULL, reset_token_expiry = NULL WHERE id = ?",
         [users[0].id]
@@ -399,6 +367,13 @@ exports.forgotPassword = async (req, res) => {
     res.json({
       success: true,
       message: "If email exists, password reset instructions have been sent",
+      // 🔥 For development/testing only - remove in production
+      ...(process.env.NODE_ENV === "development" && {
+        debug: {
+          token: resetToken,
+          resetUrl: resetUrl,
+        },
+      }),
     });
   } catch (error) {
     console.error("Forgot password error:", error);
@@ -509,6 +484,86 @@ exports.resetPassword = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to reset password",
+    });
+  }
+};
+
+// Logout user
+exports.logout = async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: "Logout successful",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Logout failed",
+    });
+  }
+};
+
+// Verify token
+exports.verifyToken = async (req, res) => {
+  try {
+    const [users] = await db.query(
+      "SELECT id, name, email, role, is_active FROM users WHERE id = ?",
+      [req.userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      user: users[0],
+    });
+  } catch (error) {
+    console.error("Verify token error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Verification failed",
+    });
+  }
+};
+
+// Refresh token
+exports.refreshToken = async (req, res) => {
+  try {
+    const [users] = await db.query(
+      "SELECT id, name, email, role, is_active FROM users WHERE id = ?",
+      [req.userId]
+    );
+
+    if (users.length === 0 || !users[0].is_active) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found or inactive",
+      });
+    }
+
+    const token = generateToken(users[0]);
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: users[0].id,
+        name: users[0].name,
+        email: users[0].email,
+        role: users[0].role,
+      },
+    });
+  } catch (error) {
+    console.error("Refresh token error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Token refresh failed",
     });
   }
 };
