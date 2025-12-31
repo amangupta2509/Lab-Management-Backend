@@ -93,7 +93,7 @@ exports.sanitizeFileName = (req, res, next) => {
   next();
 };
 
-// CORS configuration
+// CORS configuration - FIXED FOR MOBILE APP
 exports.corsOptions = {
   origin: function (origin, callback) {
     // In development, allow all origins
@@ -102,6 +102,7 @@ exports.corsOptions = {
     }
 
     // Allow requests with no origin (like mobile apps, Postman, curl)
+    // THIS IS CRITICAL FOR MOBILE APPS
     if (!origin) return callback(null, true);
 
     const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -111,21 +112,23 @@ exports.corsOptions = {
           "http://localhost:3001",
           "http://localhost:8081", // Expo web default
           "http://127.0.0.1:8081", // Expo web alternative
-          "http://10.75.127.122:8081", // Your actual Expo dev server
+          "http://10.51.182.136:8081", // ✅ Your computer's IP for Expo dev
+          "http://10.75.127.122:8081", // Old IP (keep for reference)
         ];
 
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       console.log("Origin not allowed:", origin);
-      callback(null, true); // Allow in development anyway
+      // ✅ ALLOW ALL ORIGINS FOR TESTING - Mobile apps often have no origin
+      callback(null, true); // Allow in development/testing
       // callback(new Error('Not allowed by CORS')); // Use this in production
     }
   },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Client-Type"],
 };
 
 // Request logging middleware
@@ -136,7 +139,7 @@ exports.requestLogger = (req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     console.log(
-      `${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`
+      `${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms - Origin: ${req.get('origin') || 'no-origin'}`
     );
   });
 
