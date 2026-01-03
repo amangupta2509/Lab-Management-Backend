@@ -264,14 +264,7 @@ exports.updateEquipment = async (req, res) => {
         ? `${req.protocol}://${req.get("host")}/${imagePath}`
         : null,
     });
-  } catch (error) {
-    console.error("Update equipment error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: error.message,
-    });
-  }
+
 };
 
 // Upload/Update equipment image (Admin only)
