@@ -431,6 +431,11 @@ exports.getMyProductivityReport = async (req, res) => {
           totalBookings: summary[0].total_bookings,
           totalUsageSessions: summary[0].total_usage_sessions,
           totalPrints: summary[0].total_prints
+        },
+        dailyHours,
+        equipmentUsage
+      }
+    });
 
   } catch (error) {
     console.error('Get productivity report error:', error);
