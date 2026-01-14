@@ -1,7 +1,8 @@
-const db = require('../config/database');
-const bcrypt = require('bcryptjs');
-const { deleteImageFile } = require('../middleware/upload');
-const path = require('path');
+const db = require("../config/database");
+const bcrypt = require("bcryptjs");
+const { deleteImageFile } = require("../middleware/upload");
+const path = require("path");
+const CONSTANTS = require("../config/constants");
 
 // Get user's own profile (detailed)
 exports.getMyProfile = async (req, res) => {
@@ -9,14 +10,14 @@ exports.getMyProfile = async (req, res) => {
     const userId = req.userId;
 
     const [users] = await db.query(
-      'SELECT id, name, email, role, phone, department, profile_image, created_at FROM users WHERE id = ?',
+      "SELECT id, name, email, role, phone, department, profile_image, created_at FROM users WHERE id = ?",
       [userId]
     );
 
     if (users.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: "User not found",
       });
     }
 
@@ -53,7 +54,7 @@ exports.getMyProfile = async (req, res) => {
     );
 
     const [printStats] = await db.query(
-      'SELECT COALESCE(SUM(print_count), 0) as total_prints FROM print_logs WHERE user_id = ?',
+      "SELECT COALESCE(SUM(print_count), 0) as total_prints FROM print_logs WHERE user_id = ?",
       [userId]
     );
 
@@ -64,16 +65,15 @@ exports.getMyProfile = async (req, res) => {
         activity: activityStats[0],
         bookings: bookingStats[0],
         usage: usageStats[0],
-        prints: printStats[0]
-      }
+        prints: printStats[0],
+      },
     });
-
   } catch (error) {
-    console.error('Get profile error:', error);
+    console.error("Get profile error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };
@@ -88,26 +88,25 @@ exports.updateProfile = async (req, res) => {
     if (!name) {
       return res.status(400).json({
         success: false,
-        message: 'Name is required'
+        message: "Name is required",
       });
     }
 
     await db.query(
-      'UPDATE users SET name = ?, phone = ?, department = ? WHERE id = ?',
+      "UPDATE users SET name = ?, phone = ?, department = ? WHERE id = ?",
       [name, phone, department, userId]
     );
 
     res.json({
       success: true,
-      message: 'Profile updated successfully'
+      message: "Profile updated successfully",
     });
-
   } catch (error) {
-    console.error('Update profile error:', error);
+    console.error("Update profile error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };
@@ -120,42 +119,41 @@ exports.uploadProfileImage = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'No image file provided'
+        message: "No image file provided",
       });
     }
 
     // Get old image path to delete it
     const [user] = await db.query(
-      'SELECT profile_image FROM users WHERE id = ?',
+      "SELECT profile_image FROM users WHERE id = ?",
       [userId]
     );
 
     // Delete old image if exists
     if (user[0].profile_image) {
-      const oldImagePath = path.join(__dirname, '..', user[0].profile_image);
+      const oldImagePath = path.join(__dirname, "..", user[0].profile_image);
       deleteImageFile(oldImagePath);
     }
 
     // Save new image path to database
     const imagePath = `uploads/users/${req.file.filename}`;
-    await db.query(
-      'UPDATE users SET profile_image = ? WHERE id = ?',
-      [imagePath, userId]
-    );
+    await db.query("UPDATE users SET profile_image = ? WHERE id = ?", [
+      imagePath,
+      userId,
+    ]);
 
     res.json({
       success: true,
-      message: 'Profile image uploaded successfully',
+      message: "Profile image uploaded successfully",
       imagePath: imagePath,
-      imageUrl: `${req.protocol}://${req.get('host')}/${imagePath}`
+      imageUrl: `${req.protocol}://${req.get("host")}/${imagePath}`,
     });
-
   } catch (error) {
-    console.error('Upload profile image error:', error);
+    console.error("Upload profile image error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };
@@ -167,38 +165,36 @@ exports.deleteProfileImage = async (req, res) => {
 
     // Get current image path
     const [user] = await db.query(
-      'SELECT profile_image FROM users WHERE id = ?',
+      "SELECT profile_image FROM users WHERE id = ?",
       [userId]
     );
 
     if (!user[0].profile_image) {
       return res.status(400).json({
         success: false,
-        message: 'No profile image to delete'
+        message: "No profile image to delete",
       });
     }
 
     // Delete image file
-    const imagePath = path.join(__dirname, '..', user[0].profile_image);
+    const imagePath = path.join(__dirname, "..", user[0].profile_image);
     deleteImageFile(imagePath);
 
     // Update database
-    await db.query(
-      'UPDATE users SET profile_image = NULL WHERE id = ?',
-      [userId]
-    );
+    await db.query("UPDATE users SET profile_image = NULL WHERE id = ?", [
+      userId,
+    ]);
 
     res.json({
       success: true,
-      message: 'Profile image deleted successfully'
+      message: "Profile image deleted successfully",
     });
-
   } catch (error) {
-    console.error('Delete profile image error:', error);
+    console.error("Delete profile image error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };
@@ -213,37 +209,39 @@ exports.changePassword = async (req, res) => {
     if (!currentPassword || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: 'Current password and new password are required'
+        message: "Current password and new password are required",
       });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({
         success: false,
-        message: 'New password must be at least 6 characters long'
+        message: "New password must be at least 6 characters long",
       });
     }
 
     // Get current user
-    const [users] = await db.query(
-      'SELECT password FROM users WHERE id = ?',
-      [userId]
-    );
+    const [users] = await db.query("SELECT password FROM users WHERE id = ?", [
+      userId,
+    ]);
 
     if (users.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: "User not found",
       });
     }
 
     // Verify current password
-    const isPasswordValid = await bcrypt.compare(currentPassword, users[0].password);
+    const isPasswordValid = await bcrypt.compare(
+      currentPassword,
+      users[0].password
+    );
 
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
-        message: 'Current password is incorrect'
+        message: "Current password is incorrect",
       });
     }
 
@@ -251,22 +249,21 @@ exports.changePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     // Update password
-    await db.query(
-      'UPDATE users SET password = ? WHERE id = ?',
-      [hashedPassword, userId]
-    );
+    await db.query("UPDATE users SET password = ? WHERE id = ?", [
+      hashedPassword,
+      userId,
+    ]);
 
     res.json({
       success: true,
-      message: 'Password changed successfully'
+      message: "Password changed successfully",
     });
-
   } catch (error) {
-    console.error('Change password error:', error);
+    console.error("Change password error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };
@@ -308,7 +305,7 @@ exports.getDashboard = async (req, res) => {
 
     // Unread notification count
     const [unreadCount] = await db.query(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = false',
+      "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = false",
       [userId]
     );
 
@@ -343,18 +340,17 @@ exports.getDashboard = async (req, res) => {
         unreadNotificationCount: unreadCount[0].count,
         weekStats: {
           workHours: (weekStats[0].week_work_minutes / 60).toFixed(2),
-          sessions: weekStats[0].week_sessions
+          sessions: weekStats[0].week_sessions,
         },
-        activeSession: activeSession[0] || null
-      }
+        activeSession: activeSession[0] || null,
+      },
     });
-
   } catch (error) {
-    console.error('Get dashboard error:', error);
+    console.error("Get dashboard error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };
@@ -365,15 +361,15 @@ exports.getMyProductivityReport = async (req, res) => {
     const userId = req.userId;
     const { date_from, date_to } = req.query;
 
-    let dateFilter = '';
+    let dateFilter = "";
     const params = [userId];
 
     if (date_from && date_to) {
-      dateFilter = 'AND activity_date BETWEEN ? AND ?';
+      dateFilter = "AND activity_date BETWEEN ? AND ?";
       params.push(date_from, date_to);
     } else {
       // Default to last 30 days
-      dateFilter = 'AND activity_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
+      dateFilter = "AND activity_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
     }
 
     // Daily work hours
@@ -430,19 +426,18 @@ exports.getMyProductivityReport = async (req, res) => {
           totalWorkHours: (summary[0].total_work_minutes / 60).toFixed(2),
           totalBookings: summary[0].total_bookings,
           totalUsageSessions: summary[0].total_usage_sessions,
-          totalPrints: summary[0].total_prints
+          totalPrints: summary[0].total_prints,
         },
         dailyHours,
-        equipmentUsage
-      }
+        equipmentUsage,
+      },
     });
-
   } catch (error) {
-    console.error('Get productivity report error:', error);
+    console.error("Get productivity report error:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: error.message
+      message: "Server error",
+      error: error.message,
     });
   }
 };

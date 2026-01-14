@@ -1,4 +1,5 @@
 const db = require("../config/database");
+const CONSTANTS = require("../config/constants");
 const { deleteImageFile } = require("../middleware/upload");
 const path = require("path");
 
@@ -169,7 +170,7 @@ exports.addEquipment = async (req, res) => {
 
     // Get image path if uploaded
     const imagePath = req.file
-      ? `uploads/equipment/${req.file.filename}`
+      ? path.join("uploads", "equipment", req.file.filename).replace(/\\/g, "/")
       : null;
 
     const [result] = await db.query(

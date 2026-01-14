@@ -1,4 +1,5 @@
 const db = require("../config/database");
+const CONSTANTS = require('../config/constants');
 
 // Get user's activity logs
 exports.getMyActivity = async (req, res) => {
@@ -39,23 +40,30 @@ exports.getMyActivity = async (req, res) => {
     });
   }
 };
+
 exports.autoSignIn = async (userId) => {
+  const connection = await db.getConnection();
   try {
-    // Check if already signed in today
-    const [existing] = await db.query(
-      "SELECT * FROM activity_logs WHERE user_id = ? AND activity_date = CURDATE() AND sign_out_time IS NULL",
+    await connection.beginTransaction();
+
+    const [existing] = await connection.query(
+      "SELECT * FROM activity_logs WHERE user_id = ? AND activity_date = CURDATE() AND sign_out_time IS NULL FOR UPDATE",
       [userId]
     );
 
     if (existing.length === 0) {
-      // Create new activity log
-      await db.query(
+      await connection.query(
         "INSERT INTO activity_logs (user_id, activity_date, sign_in_time) VALUES (?, CURDATE(), NOW())",
         [userId]
       );
     }
+
+    await connection.commit();
   } catch (error) {
+    await connection.rollback();
     console.error("Auto sign-in error:", error);
+  } finally {
+    connection.release();
   }
 };
 

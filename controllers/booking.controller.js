@@ -1,5 +1,5 @@
 const db = require("../config/database");
-
+const CONSTANTS = require('../config/constants');
 // Create new booking
 
 exports.createBooking = async (req, res) => {
@@ -34,24 +34,11 @@ exports.createBooking = async (req, res) => {
 
     const [overlapping] = await db.query(
       `SELECT * FROM bookings
-      WHERE equipment_id = ?
-      AND booking_date = ?
-      AND status IN ('pending', 'approved')
-      AND (
-        (start_time < ? AND end_time > ?) OR
-        (start_time < ? AND end_time > ?) OR
-        (start_time >= ? AND end_time <= ?)
-      )`,
-      [
-        equipment_id,
-        cleanDate,
-        end_time,
-        start_time,
-        end_time,
-        start_time,
-        start_time,
-        end_time,
-      ]
+   WHERE equipment_id = ?
+   AND booking_date = ?
+   AND status IN ('pending', 'approved')
+   AND NOT (end_time <= ? OR start_time >= ?)`,
+      [equipment_id, cleanDate, start_time, end_time]
     );
 
     if (overlapping.length > 0) {
@@ -225,7 +212,6 @@ exports.approveBooking = async (req, res) => {
       ["approved", adminId, remarks, id]
     );
 
-    // ✅ FIXED: Added comma after query
     await db.query(
       "INSERT INTO notifications (user_id, title, message, type, related_booking_id) VALUES (?, ?, ?, ?, ?)",
       [
@@ -331,7 +317,6 @@ exports.rejectBooking = async (req, res) => {
       ["rejected", adminId, remarks, id]
     );
 
-    // ✅ FIXED: Added comma after query
     await db.query(
       "INSERT INTO notifications (user_id, title, message, type, related_booking_id) VALUES (?, ?, ?, ?, ?)",
       [

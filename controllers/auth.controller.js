@@ -1,9 +1,10 @@
-// controllers/auth.controller.js
 const db = require("../config/database");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+const { verifyGoogleToken } = require("../config/googleAuth");
+const CONSTANTS = require("../config/constants");
 
 // Configure email transporter
 const transporter = nodemailer.createTransport({
@@ -16,6 +17,14 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Validate email configuration
+if (
+  process.env.SMTP_HOST &&
+  (!process.env.SMTP_USER || !process.env.SMTP_PASS)
+) {
+  console.warn("⚠️ SMTP_HOST is set but SMTP_USER or SMTP_PASS is missing");
+}
+
 // Generate JWT token
 const generateToken = (user) => {
   return jwt.sign(
@@ -26,29 +35,28 @@ const generateToken = (user) => {
     },
     process.env.JWT_SECRET,
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || "24h",
+      expiresIn: CONSTANTS.SESSION.JWT_EXPIRY,
     }
   );
 };
 
 // Password validation helper
 const validatePassword = (password) => {
-  if (password.length < 8) {
-    return "Password must be at least 8 characters long";
-  }
+  const { MIN_LENGTH, REQUIRE_UPPERCASE, REQUIRE_LOWERCASE, REQUIRE_NUMBER } =
+    CONSTANTS.PASSWORD;
 
-  if (!/(?=.*[a-z])/.test(password)) {
+  if (password.length < MIN_LENGTH) {
+    return `Password must be at least ${MIN_LENGTH} characters long`;
+  }
+  if (REQUIRE_LOWERCASE && !/(?=.*[a-z])/.test(password)) {
     return "Password must contain at least one lowercase letter";
   }
-
-  if (!/(?=.*[A-Z])/.test(password)) {
+  if (REQUIRE_UPPERCASE && !/(?=.*[A-Z])/.test(password)) {
     return "Password must contain at least one uppercase letter";
   }
-
-  if (!/(?=.*\d)/.test(password)) {
+  if (REQUIRE_NUMBER && !/(?=.*\d)/.test(password)) {
     return "Password must contain at least one number";
   }
-
   return null;
 };
 
@@ -57,7 +65,6 @@ exports.register = async (req, res) => {
   try {
     const { name, email, password, phone, department } = req.body;
 
-    // Validation
     if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
@@ -65,7 +72,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -74,7 +80,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Password validation
     const passwordError = validatePassword(password);
     if (passwordError) {
       return res.status(400).json({
@@ -83,7 +88,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Check if user already exists
     const [existingUser] = await db.query(
       "SELECT id FROM users WHERE email = ?",
       [email]
@@ -96,20 +100,26 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user (default role is 'user')
     const [result] = await db.query(
-      "INSERT INTO users (name, email, password, phone, department, role, is_active) VALUES (?, ?, ?, ?, ?, 'user', true)",
-      [name, email, hashedPassword, phone, department]
+      `INSERT INTO users (name, email, password, phone, department, role, is_active, oauth_provider)
+      VALUES (?, ?, ?, ?, ?, ?, TRUE, ?)`,
+      [
+        name,
+        email,
+        hashedPassword,
+        phone,
+        department,
+        CONSTANTS.ROLES.USER,
+        CONSTANTS.OAUTH_PROVIDERS.LOCAL,
+      ]
     );
 
-    // Generate token
     const token = generateToken({
       id: result.insertId,
       email: email,
-      role: "user",
+      role: CONSTANTS.ROLES.USER,
     });
 
     res.status(201).json({
@@ -120,7 +130,8 @@ exports.register = async (req, res) => {
         id: result.insertId,
         name,
         email,
-        role: "user",
+        role: CONSTANTS.ROLES.USER,
+        authProvider: CONSTANTS.OAUTH_PROVIDERS.LOCAL,
       },
     });
   } catch (error) {
@@ -132,12 +143,11 @@ exports.register = async (req, res) => {
   }
 };
 
-// Login user
+// Login user (local authentication)
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validation
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -145,9 +155,9 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Find user
     const [users] = await db.query(
-      "SELECT id, name, email, password, role, is_active FROM users WHERE email = ?",
+      `SELECT id, name, email, password, role, is_active, oauth_provider
+      FROM users WHERE email = ?`,
       [email]
     );
 
@@ -160,7 +170,14 @@ exports.login = async (req, res) => {
 
     const user = users[0];
 
-    // Check if account is active
+    if (user.oauth_provider === CONSTANTS.OAUTH_PROVIDERS.GOOGLE) {
+      return res.status(400).json({
+        success: false,
+        message: "This account uses Google Sign-In. Please login with Google.",
+        loginMethod: "google",
+      });
+    }
+
     if (!user.is_active) {
       return res.status(403).json({
         success: false,
@@ -168,7 +185,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -178,10 +194,8 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Generate token
     const token = generateToken(user);
 
-    // Update last login
     await db.query("UPDATE users SET last_login = NOW() WHERE id = ?", [
       user.id,
     ]);
@@ -195,6 +209,7 @@ exports.login = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        authProvider: user.oauth_provider,
       },
     });
   } catch (error) {
@@ -206,9 +221,188 @@ exports.login = async (req, res) => {
   }
 };
 
-// Forgot password
-// In controllers/auth.controller.js - Update the forgotPassword function
+// Google Mobile Auth (React Native Expo)
+exports.googleMobileAuth = async (req, res) => {
+  try {
+    const { idToken } = req.body;
 
+    if (!idToken) {
+      return res.status(400).json({
+        success: false,
+        message: "ID token is required",
+        hint: "Send idToken obtained from Google Sign-In SDK",
+      });
+    }
+
+    const verification = await verifyGoogleToken(idToken);
+
+    if (!verification.success) {
+      console.error("Token verification failed:", verification.error);
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google token",
+        error: verification.error,
+      });
+    }
+
+    const { googleId, email, name, picture, emailVerified } = verification.data;
+
+    console.log(`📱 Mobile OAuth login attempt: ${email}`);
+
+    // Check if user exists with this Google ID
+    let [users] = await db.query("SELECT * FROM users WHERE google_id = ?", [
+      googleId,
+    ]);
+
+    if (users.length > 0) {
+      const user = users[0];
+
+      if (!user.is_active) {
+        return res.status(403).json({
+          success: false,
+          message: "Account is inactive. Please contact administrator.",
+        });
+      }
+
+      await db.query(
+        `UPDATE users
+        SET last_login = NOW(),
+        avatar_url = ?,
+        email_verified = ?
+        WHERE id = ?`,
+        [picture, emailVerified, user.id]
+      );
+
+      const token = generateToken(user);
+
+      console.log(`✅ Existing user logged in: ${user.email}`);
+
+      return res.json({
+        success: true,
+        message: "Login successful",
+        token,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          department: user.department,
+          authProvider: CONSTANTS.OAUTH_PROVIDERS.GOOGLE,
+          avatar: picture,
+          emailVerified: emailVerified,
+        },
+      });
+    }
+
+    // Check if user exists with same email (different auth method)
+    [users] = await db.query("SELECT * FROM users WHERE email = ?", [email]);
+
+    if (users.length > 0) {
+      const user = users[0];
+
+      if (!user.is_active) {
+        return res.status(403).json({
+          success: false,
+          message: "Account is inactive. Please contact administrator.",
+        });
+      }
+
+      await db.query(
+        `UPDATE users
+        SET google_id = ?,
+        oauth_provider = ?,
+        avatar_url = ?,
+        email_verified = ?,
+        last_login = NOW()
+        WHERE id = ?`,
+        [
+          googleId,
+          CONSTANTS.OAUTH_PROVIDERS.GOOGLE,
+          picture,
+          emailVerified,
+          user.id,
+        ]
+      );
+
+      const token = generateToken(user);
+
+      console.log(`🔗 Google account linked: ${user.email}`);
+
+      return res.json({
+        success: true,
+        message: "Account linked successfully",
+        token,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          department: user.department,
+          authProvider: CONSTANTS.OAUTH_PROVIDERS.GOOGLE,
+          avatar: picture,
+          emailVerified: emailVerified,
+        },
+      });
+    }
+
+    // Create new user with Google OAuth
+    const [result] = await db.query(
+      `INSERT INTO users (
+        name,
+        email,
+        google_id,
+        oauth_provider,
+        email_verified,
+        avatar_url,
+        role,
+        is_active,
+        last_login
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, NOW())`,
+      [
+        name,
+        email,
+        googleId,
+        CONSTANTS.OAUTH_PROVIDERS.GOOGLE,
+        emailVerified,
+        picture,
+        CONSTANTS.ROLES.USER,
+      ]
+    );
+
+    const token = generateToken({
+      id: result.insertId,
+      email: email,
+      role: CONSTANTS.ROLES.USER,
+    });
+
+    console.log(`✨ New user registered: ${email}`);
+
+    res.status(201).json({
+      success: true,
+      message: "Registration successful",
+      token,
+      user: {
+        id: result.insertId,
+        name,
+        email,
+        role: CONSTANTS.ROLES.USER,
+        department: null,
+        authProvider: CONSTANTS.OAUTH_PROVIDERS.GOOGLE,
+        avatar: picture,
+        emailVerified: emailVerified,
+      },
+    });
+  } catch (error) {
+    console.error("Google mobile auth error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Authentication failed. Please try again.",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// Forgot password
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -221,7 +415,7 @@ exports.forgotPassword = async (req, res) => {
     }
 
     const [users] = await db.query(
-      "SELECT id, email, name FROM users WHERE email = ?",
+      "SELECT id, email, name, oauth_provider FROM users WHERE email = ?",
       [email]
     );
 
@@ -232,32 +426,32 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    // Generate reset token
+    if (users[0].oauth_provider === CONSTANTS.OAUTH_PROVIDERS.GOOGLE) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This account uses Google Sign-In. Password reset is not available.",
+      });
+    }
+
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetTokenHash = crypto
       .createHash("sha256")
       .update(resetToken)
       .digest("hex");
-    const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour
+    const resetTokenExpiry = new Date(
+      Date.now() + CONSTANTS.SESSION.RESET_TOKEN_EXPIRY
+    );
 
     await db.query(
       "UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?",
       [resetTokenHash, resetTokenExpiry, users[0].id]
     );
 
-    const clientType = req.headers["x-client-type"] || "mobile"; // Can be set by frontend
-
-    let resetUrl;
-    if (clientType === "web") {
-      // For web version
-      resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
-    } else {
-      // For mobile app - use deep link
-      resetUrl = `labmanagementfrontend://reset-password?token=${resetToken}`;
-
-      // Alternative: Universal link (if you have a domain)
-      // resetUrl = `https://labmanagement.app/reset-password?token=${resetToken}`;
-    }
+    // For React Native - always use deep link
+    const resetUrl = `${
+      process.env.FRONTEND_URL_PROD || "yourapp://"
+    }reset-password?token=${resetToken}`;
 
     try {
       await transporter.sendMail({
@@ -265,94 +459,52 @@ exports.forgotPassword = async (req, res) => {
         to: email,
         subject: "Password Reset Request - Lab Management System",
         html: `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <style>
-              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-              .header { background: #2196F3; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
-              .content { background: #f5f5f5; padding: 30px; border-radius: 0 0 8px 8px; }
-              .button {
-                display: inline-block;
-                background: #2196F3;
-                color: white;
-                padding: 12px 30px;
-                text-decoration: none;
-                border-radius: 5px;
-                margin: 20px 0;
-                font-weight: bold;
-              }
-              .token-box {
-                background: white;
-                padding: 15px;
-                border-radius: 8px;
-                margin: 20px 0;
-                border: 2px dashed #2196F3;
-                word-break: break-all;
-                font-family: monospace;
-                font-size: 14px;
-              }
-              .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-              .warning { background: #fff3cd; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #ffc107; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <div class="header">
-                <h1> Password Reset Request</h1>
-              </div>
-              <div class="content">
-                <p>Hello <strong>${users[0].name}</strong>,</p>
-                <p>You requested to reset your password for your Lab Management System account.</p>
-                
-                ${
-                  clientType === "mobile"
-                    ? `
-                  <p><strong>For Mobile App:</strong></p>
-                  <p>Tap the button below to open the app and reset your password:</p>
-                  <p style="text-align: center;">
-                    <a href="${resetUrl}" class="button">Reset Password in App</a>
-                  </p>
-                  
-                  <div class="warning">
-                    <strong>📱 Mobile App Instructions:</strong>
-                    <ol>
-                      <li>Tap the button above to open the Lab Management app</li>
-                      <li>If the app doesn't open automatically, copy the token below</li>
-                      <li>Open the app manually and paste the token</li>
-                    </ol>
-                  </div>
-                  
-                  <p><strong>Your Reset Token:</strong></p>
-                  <div class="token-box">${resetToken}</div>
-                `
-                    : `
-                  <p style="text-align: center;">
-                    <a href="${resetUrl}" class="button">Reset Password</a>
-                  </p>
-                  <p>Or copy and paste this link in your browser:</p>
-                  <p style="word-break: break-all; color: #2196F3;">${resetUrl}</p>
-                `
-                }
-                
-                <p><strong>⏰ This link will expire in 1 hour.</strong></p>
-                <p>If you didn't request this password reset, please ignore this email and your password will remain unchanged.</p>
-              </div>
-              <div class="footer">
-                <p>&copy; ${new Date().getFullYear()} Lab Management System. All rights reserved.</p>
-              </div>
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: #2196F3; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background: #f5f5f5; padding: 30px; border-radius: 0 0 8px 8px; }
+            .token-box {
+              background: white;
+              padding: 15px;
+              border-radius: 8px;
+              font-family: monospace;
+              font-size: 16px;
+              word-break: break-all;
+              margin: 20px 0;
+            }
+            .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>🔐 Password Reset Request</h1>
             </div>
-          </body>
-          </html>
+            <div class="content">
+              <p>Hello <strong>${users[0].name}</strong>,</p>
+              <p>You requested to reset your password for your Lab Management System account.</p>
+              <p><strong>Your Reset Token:</strong></p>
+              <div class="token-box">${resetToken}</div>
+              <p>Copy this token and paste it in the mobile app.</p>
+              <p><strong>⏰ This token will expire in 1 hour.</strong></p>
+              <p>If you didn't request this password reset, please ignore this email.</p>
+            </div>
+            <div class="footer">
+              <p>&copy; ${new Date().getFullYear()} Lab Management System. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
         `,
       });
 
-      console.log("✅ Password reset email sent to:", email);
-      console.log("🔗 Reset URL type:", clientType);
+      console.log("📧 Password reset email sent to:", email);
     } catch (emailError) {
-      console.error("❌ Email sending failed:", emailError);
-
+      console.error("📧 Email sending failed:", emailError);
       await db.query(
         "UPDATE users SET reset_token = NULL, reset_token_expiry = NULL WHERE id = ?",
         [users[0].id]
@@ -367,7 +519,6 @@ exports.forgotPassword = async (req, res) => {
     res.json({
       success: true,
       message: "If email exists, password reset instructions have been sent",
-      // 🔥 For development/testing only - remove in production
       ...(process.env.NODE_ENV === "development" && {
         debug: {
           token: resetToken,
@@ -396,7 +547,6 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Validate new password
     const passwordError = validatePassword(newPassword);
     if (passwordError) {
       return res.status(400).json({
@@ -405,13 +555,11 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Hash the token
     const resetTokenHash = crypto
       .createHash("sha256")
       .update(token)
       .digest("hex");
 
-    // Find user with valid reset token
     const [users] = await db.query(
       "SELECT id, email, name FROM users WHERE reset_token = ? AND reset_token_expiry > NOW()",
       [resetTokenHash]
@@ -424,56 +572,12 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Update password and clear reset token
     await db.query(
       "UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?",
       [hashedPassword, users[0].id]
     );
-
-    // Send confirmation email (optional)
-    try {
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || process.env.SMTP_USER,
-        to: users[0].email,
-        subject: "Password Successfully Reset - Lab Management System",
-        html: `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <style>
-              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-              .header { background: #4caf50; color: white; padding: 20px; text-align: center; }
-              .content { background: #f5f5f5; padding: 30px; }
-              .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <div class="header">
-                <h1>Password Reset Successful</h1>
-              </div>
-              <div class="content">
-                <p>Hello ${users[0].name},</p>
-                <p>Your password has been successfully reset.</p>
-                <p>You can now log in to your Lab Management System account with your new password.</p>
-                <p>If you did not make this change, please contact support immediately.</p>
-              </div>
-              <div class="footer">
-                <p>&copy; ${new Date().getFullYear()} Lab Management System. All rights reserved.</p>
-              </div>
-            </div>
-          </body>
-          </html>
-        `,
-      });
-    } catch (emailError) {
-      console.error("Confirmation email failed:", emailError);
-      // Don't fail the request if confirmation email fails
-    }
 
     res.json({
       success: true,
@@ -491,6 +595,8 @@ exports.resetPassword = async (req, res) => {
 // Logout user
 exports.logout = async (req, res) => {
   try {
+    // For JWT-based auth, client handles token removal
+    // This endpoint exists for consistency
     res.json({
       success: true,
       message: "Logout successful",
@@ -508,7 +614,8 @@ exports.logout = async (req, res) => {
 exports.verifyToken = async (req, res) => {
   try {
     const [users] = await db.query(
-      "SELECT id, name, email, role, is_active FROM users WHERE id = ?",
+      `SELECT id, name, email, role, is_active, oauth_provider, avatar_url
+      FROM users WHERE id = ?`,
       [req.userId]
     );
 
@@ -536,7 +643,8 @@ exports.verifyToken = async (req, res) => {
 exports.refreshToken = async (req, res) => {
   try {
     const [users] = await db.query(
-      "SELECT id, name, email, role, is_active FROM users WHERE id = ?",
+      `SELECT id, name, email, role, is_active, oauth_provider
+      FROM users WHERE id = ?`,
       [req.userId]
     );
 
@@ -557,6 +665,7 @@ exports.refreshToken = async (req, res) => {
         name: users[0].name,
         email: users[0].email,
         role: users[0].role,
+        authProvider: users[0].oauth_provider,
       },
     });
   } catch (error) {

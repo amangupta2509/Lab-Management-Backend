@@ -3,12 +3,15 @@ const express = require("express");
 const router = express.Router();
 const equipmentController = require("../controllers/equipment.controller");
 const { verifyToken, isAdmin } = require("../middleware/auth");
-const { uploadEquipmentImage } = require("../middleware/upload");
 const {
   validateEquipment,
   validateId,
   validatePagination,
 } = require("../middleware/validation");
+const {
+  uploadEquipmentImage,
+  handleMulterError,
+} = require("../middleware/upload");
 const { uploadLimiter, sanitizeFileName } = require("../middleware/security");
 
 router.get(
@@ -29,6 +32,7 @@ router.post(
   verifyToken,
   isAdmin,
   uploadEquipmentImage,
+  handleMulterError,
   sanitizeFileName,
   validateEquipment,
   equipmentController.addEquipment

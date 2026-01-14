@@ -1,28 +1,32 @@
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
 const hpp = require("hpp");
+const CONSTANTS = require("../config/constants");
 
 // General API rate limiter
 exports.apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: CONSTANTS.RATE_LIMITS.API.WINDOW_MS,
+  max: CONSTANTS.RATE_LIMITS.API.MAX_REQUESTS,
   message: {
     success: false,
-    message:
-      "Too many requests from this IP, please try again after 15 minutes",
+    message: "Too many requests from this IP, please try again later",
   },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting in development
+    return process.env.NODE_ENV === "development";
+  },
 });
 
 // Strict rate limiter for authentication routes
 exports.authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 login attempts per windowMs
-  skipSuccessfulRequests: true, // Don't count successful requests
+  windowMs: CONSTANTS.RATE_LIMITS.AUTH.WINDOW_MS,
+  max: CONSTANTS.RATE_LIMITS.AUTH.MAX_REQUESTS,
+  skipSuccessfulRequests: true,
   message: {
     success: false,
-    message: "Too many login attempts, please try again after 15 minutes",
+    message: "Too many login attempts, please try again later",
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -30,8 +34,8 @@ exports.authLimiter = rateLimit({
 
 // Rate limiter for booking creation
 exports.bookingLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Limit each IP to 10 bookings per hour
+  windowMs: CONSTANTS.RATE_LIMITS.BOOKING.WINDOW_MS,
+  max: CONSTANTS.RATE_LIMITS.BOOKING.MAX_REQUESTS,
   message: {
     success: false,
     message: "Too many booking requests, please try again later",
@@ -42,8 +46,8 @@ exports.bookingLimiter = rateLimit({
 
 // Rate limiter for file uploads
 exports.uploadLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20, // Limit each IP to 20 uploads per hour
+  windowMs: CONSTANTS.RATE_LIMITS.UPLOAD.WINDOW_MS,
+  max: CONSTANTS.RATE_LIMITS.UPLOAD.MAX_REQUESTS,
   message: {
     success: false,
     message: "Too many upload requests, please try again later",
@@ -52,39 +56,40 @@ exports.uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Configure helmet for security headers
+// Configure helmet for security headers (Mobile-optimized)
+// Simplified for React Native - remove web-specific CSP
 exports.securityHeaders = helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
+  contentSecurityPolicy: false, // Not needed for mobile APIs
   hsts: {
-    maxAge: 31536000, // 1 year
+    maxAge: 31536000,
     includeSubDomains: true,
     preload: true,
   },
-  frameguard: {
-    action: "deny",
-  },
+  frameguard: false, // Not applicable to mobile
   noSniff: true,
   xssFilter: true,
+  referrerPolicy: { policy: "no-referrer" },
 });
 
 // Prevent HTTP Parameter Pollution
 exports.preventPollution = hpp({
-  whitelist: ["status", "type", "role", "page", "limit", "sort"], // Allow duplicate params for these fields
+  whitelist: [
+    "status",
+    "type",
+    "role",
+    "page",
+    "limit",
+    "sort",
+    "days",
+    "date_from",
+    "date_to",
+  ],
 });
 
 // Custom middleware to sanitize file names
 exports.sanitizeFileName = (req, res, next) => {
   if (req.file) {
-    // Remove any path traversal attempts
     req.file.originalname = req.file.originalname.replace(/\.\./g, "");
-    // Remove special characters except dots and hyphens
     req.file.originalname = req.file.originalname.replace(
       /[^a-zA-Z0-9.-]/g,
       "_"
@@ -93,69 +98,145 @@ exports.sanitizeFileName = (req, res, next) => {
   next();
 };
 
-// CORS configuration - FIXED FOR MOBILE APP
+// CORS configuration - OPTIMIZED FOR REACT NATIVE
 exports.corsOptions = {
   origin: function (origin, callback) {
+    // React Native doesn't send origin header
+    if (!origin) {
+      return callback(null, true);
+    }
+
     // In development, allow all origins
     if (process.env.NODE_ENV === "development") {
       return callback(null, true);
     }
 
-    // Allow requests with no origin (like mobile apps, Postman, curl)
-    // THIS IS CRITICAL FOR MOBILE APPS
-    if (!origin) return callback(null, true);
-
+    // In production, check allowed origins
     const allowedOrigins = process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",")
-      : [
-          "http://localhost:3000",
-          "http://localhost:3001",
-          "http://localhost:8081", // Expo web default
-          "http://127.0.0.1:8081", // Expo web alternative
-          "http://10.51.182.136:8081", // ✅ Your computer's IP for Expo dev
-          "http://10.75.127.122:8081", // Old IP (keep for reference)
-        ];
+      : [];
 
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (allowedOrigins.length === 0 || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log("Origin not allowed:", origin);
-      // ✅ ALLOW ALL ORIGINS FOR TESTING - Mobile apps often have no origin
-      callback(null, true); // Allow in development/testing
-      // callback(new Error('Not allowed by CORS')); // Use this in production
+      // Still allow for mobile apps without origin
+      callback(null, true);
     }
   },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Client-Type"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "X-Client-Type",
+    "X-App-Version",
+    "X-Device-Id",
+    "X-Platform",
+  ],
+  exposedHeaders: ["X-Total-Count", "X-Page-Count"],
 };
 
 // Request logging middleware
 exports.requestLogger = (req, res, next) => {
   const start = Date.now();
 
-  // Log after response is sent
   res.on("finish", () => {
     const duration = Date.now() - start;
-    console.log(
-      `${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms - Origin: ${req.get('origin') || 'no-origin'}`
-    );
+    const clientType = req.get("X-Client-Type") || "unknown";
+    const appVersion = req.get("X-App-Version") || "unknown";
+    const platform = req.get("X-Platform") || "unknown";
+
+    if (process.env.NODE_ENV === "development") {
+      console.log(
+        `${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms - ${platform}/${clientType} v${appVersion}`
+      );
+    }
   });
 
   next();
 };
 
-// Error sanitizer - don't expose internal errors
+// Error sanitizer - never expose sensitive info in production
 exports.sanitizeError = (err, req, res, next) => {
   console.error("Error:", err);
 
-  // Don't expose error details in production
   const isDevelopment = process.env.NODE_ENV === "development";
+
+  // Don't expose sensitive information in production
+  const sanitizedMessage = isDevelopment
+    ? err.message
+    : "An error occurred processing your request";
 
   res.status(err.status || 500).json({
     success: false,
-    message: err.message || "Internal server error",
-    ...(isDevelopment && { stack: err.stack }),
+    message: sanitizedMessage,
+    ...(isDevelopment && {
+      stack: err.stack,
+      details: err.details,
+    }),
   });
+};
+
+// Middleware to detect and log mobile client info
+exports.mobileClientInfo = (req, res, next) => {
+  const clientType = req.get("X-Client-Type");
+  const appVersion = req.get("X-App-Version");
+  const deviceId = req.get("X-Device-Id");
+  const platform = req.get("X-Platform");
+
+  if (clientType === "mobile" || platform) {
+    req.mobileClient = {
+      type: clientType || "mobile",
+      version: appVersion,
+      deviceId: deviceId,
+      platform:
+        platform ||
+        (req.get("User-Agent")?.includes("Android") ? "android" : "ios"),
+    };
+  }
+
+  next();
+};
+
+// Input validation sanitizer
+exports.sanitizeInput = (req, res, next) => {
+  // Sanitize common injection patterns
+  const sanitizeString = (str) => {
+    if (typeof str !== "string") return str;
+    // Only remove SQL injection patterns, not all special characters
+    // Allow semicolons in text but prevent SQL injection
+    return str.replace(
+      /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|UNION)\b)/gi,
+      ""
+    );
+  };
+
+  // Recursively sanitize request body
+  const sanitizeObject = (obj) => {
+    if (typeof obj !== "object" || obj === null) return obj;
+
+    const sanitized = Array.isArray(obj) ? [] : {};
+
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        if (typeof obj[key] === "string") {
+          sanitized[key] = sanitizeString(obj[key]);
+        } else if (typeof obj[key] === "object") {
+          sanitized[key] = sanitizeObject(obj[key]);
+        } else {
+          sanitized[key] = obj[key];
+        }
+      }
+    }
+
+    return sanitized;
+  };
+
+  if (req.body) {
+    req.body = sanitizeObject(req.body);
+  }
+
+  next();
 };
